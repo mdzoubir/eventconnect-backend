@@ -1,15 +1,14 @@
 {
-  "version": 2,
   "builds": [
     {
-      "src": "eventconnect/eventconnect/wsgi.py",
+      "src": "vercel_app.py",
       "use": "@vercel/python"
     }
   ],
   "routes": [
     {
       "src": "/(.*)",
-      "dest": "eventconnect/eventconnect/wsgi.py"
+      "dest": "vercel_app.py"
     }
   ]
 }
