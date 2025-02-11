@@ -1,0 +1,97 @@
+# Environments
+venv/
+env/
+.venv/
+.env
+.env.local
+.env.*.local
+.python-version
+
+# Django
+*.log
+*.pot
+*.pyc
+__pycache__/
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+media/
+staticfiles/
+
+# IDE/Editor
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+*.bak
+~*
+
+# Python
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Testing/coverage
+.coverage
+.coverage.*
+.cache
+.pytest_cache/
+htmlcov/
+.pytest_cache/
+cover/
+
+# Frontend (if applicable)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+webpack-bundle-tracker.json
+*.css.map
+*.js.map
+
+# Database
+*.db
+*.sql
+*.sqlite
+
+# Docker (optional)
+.dockerignore
+docker-compose.override.yml
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+
+# PyCharm
+.idea/
+.idea/*
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Logs
+logs/
+*.log
