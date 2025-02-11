@@ -11,6 +11,9 @@ import os
 
 from django.core.wsgi import get_wsgi_application
 
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'eventconnect.settings')
-
+if os.environ.get('VERCEL') == '1' or os.environ.get('VERCEL_ENV') == 'production':
+    os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'eventconnect.eventconnect.settings')
+else:
+    os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'eventconnect.settings')
+    
 application = get_wsgi_application()
