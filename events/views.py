@@ -5,28 +5,54 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from rest_framework.status import HTTP_201_CREATED
+from rest_framework.pagination import PageNumberPagination
+from rest_framework.decorators import action
 
 from .models import Event, RSVP, User, EventCategory
-from .serializers import EventSerializer, UserRegistrationSerializer, RSVPSerializer, EventCategorySerializer
+from .serializers import EventListSerializer, EventSerializer, UserRegistrationSerializer, RSVPSerializer, EventCategorySerializer
 
 from .utils import match_events_to_user
 
 
+#  Custom pagination
+class EventPagination(PageNumberPagination):
+    page_size = 10
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+
+
+
 class EventViewSet(viewsets.ModelViewSet):
     queryset = Event.objects.all()
-    serializer_class = EventSerializer
+    pagination_class = EventPagination
 
-    class Meta:
-        model = Event
-        fields = '__all__'
-        read_only_fields = ('organizer',)
+    def get_queryset(self):
+        queryset = Event.objects.all()
+        ordering = self.request.query_params.get('ordering')
 
+        if ordering == 'recent':
+            return queryset.order_by('-created_at')
+        elif ordering == 'upcoming':
+            now = timezone.now()
+            return queryset.filter(date__gte=now).order_by('date')
+
+        print(queryset)
+        return queryset
+
+    def get_serializer_class(self):
+        if self.action == 'list':
+            return EventListSerializer
+        return EventSerializer
+
+    def list(self, request, *args, **kwargs):
+        response = super().list(request, *args, **kwargs)
+        response.data['total_pages'] = (response.data['count'] // self.pagination_class.page_size) + 1
+        return response
 
     def get_permissions(self):
         if self.action == 'list':
             return [AllowAny()]
-        else:
-            return [IsAuthenticated()]
+        return [IsAuthenticated()]
 
     def perform_create(self, serializer):
         user = self.request.user
