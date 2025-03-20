@@ -1,35 +1,85 @@
+from django.contrib.auth.base_user import BaseUserManager
 from django.contrib.auth.models import AbstractUser
 from django.db import models
-from django.utils import timezone
-from rest_framework.exceptions import ValidationError
 
 
-# Create your models here.
+class UserManager(BaseUserManager):
+    def create_user(self, email, password=None, **extra_fields):
+        if not email:
+            raise ValueError("Users must have an email address")
+        email = self.normalize_email(email)
+        user = self.model(email=email, **extra_fields)
+        user.set_password(password)
+        user.save(using=self._db)
+        return user
+
+    def create_superuser(self, email, password=None, **extra_fields):
+        extra_fields.setdefault('is_staff', True)
+        extra_fields.setdefault('is_superuser', True)
+        return self.create_user(email, password, **extra_fields)
+
+
 class User(AbstractUser):
-    ROLE_CHOICES = (
+    username = None
+    email = models.EmailField(unique=True)
+    profile_data = models.JSONField(default=dict, blank=True)
+    preferences = models.JSONField(default=dict, blank=True)
+    location = models.ForeignKey('Location', on_delete=models.SET_NULL, null=True, blank=False)
+    availability = models.JSONField(default=dict, blank=True)
+
+    ROLE_CHOICES = [
+        ('user', 'User'),
         ('organizer', 'Organizer'),
-        ('participant', 'Participant'),
-    )
-    role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='participant')
-    interests = models.TextField()
-    location = models.CharField(max_length=100)
+        ('admin', 'Admin'),
+    ]
+    role = models.CharField(max_length=10, choices=ROLE_CHOICES, default='user')
+
+    USERNAME_FIELD = 'email'
+    REQUIRED_FIELDS = []
+
+    objects = UserManager()
+
+
+class Location(models.Model):
+    name = models.CharField(max_length=255, unique=True)
+    latitude = models.FloatField(null=True, blank=True)
+    longitude = models.FloatField(null=True, blank=True)
+    address = models.TextField(null=True, blank=True)
 
     def __str__(self):
-        return f"{self.username} ({self.role})"
+        return self.name
+
+
+class EventCategory(models.Model):
+    name = models.CharField(max_length=255)
+    description = models.TextField(blank=True)
+
+    def __str__(self):
+        return self.name
 
 
 class Event(models.Model):
     title = models.CharField(max_length=255)
     description = models.TextField()
-    date = models.DateTimeField()
-    location = models.CharField(max_length=255)
-    organizer = models.ForeignKey(User, on_delete=models.CASCADE, related_name="organized_events")
-    category = models.ForeignKey('EventCategory', on_delete=models.CASCADE, null=True)
+    datetime = models.DateTimeField()
+    location = models.ForeignKey(Location, on_delete=models.CASCADE)
+    category = models.ForeignKey(EventCategory, on_delete=models.SET_NULL, null=True)
+    creator = models.ForeignKey(User, on_delete=models.CASCADE)
+    capacity = models.PositiveIntegerField()
+    price = models.DecimalField(max_digits=10, decimal_places=2)
+
+    STATUS_CHOICES = [
+        ('draft', 'Draft'),
+        ('published', 'Published'),
+        ('cancelled', 'Cancelled'),
+    ]
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='draft')
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
         return self.title
-    
+
 
 class EventImage(models.Model):
     event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name='images')
@@ -43,16 +93,44 @@ class EventImage(models.Model):
         super().save(*args, **kwargs)
 
 
-class EventCategory(models.Model):
-    name = models.CharField(max_length=100)
-
-
 class RSVP(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     event = models.ForeignKey(Event, on_delete=models.CASCADE)
+
+    STATUS_CHOICES = [
+        ('attending', 'Attending'),
+        ('maybe', 'Maybe'),
+        ('declined', 'Declined'),
+    ]
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES)
     timestamp = models.DateTimeField(auto_now_add=True)
 
-    class Meta:
-        constraints = [
-            models.UniqueConstraint(fields=['user', 'event'], name='unique_rsvp')
-        ]
+
+class Message(models.Model):
+    sender = models.ForeignKey(User, related_name='sent_messages', on_delete=models.CASCADE)
+    receiver = models.ForeignKey(User, related_name='received_messages', on_delete=models.CASCADE)
+    event = models.ForeignKey(Event, on_delete=models.CASCADE, null=True, blank=True)
+    content = models.TextField()
+    timestamp = models.DateTimeField(auto_now_add=True)
+
+
+class Review(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    event = models.ForeignKey(Event, on_delete=models.CASCADE)
+    rating = models.IntegerField()
+    comment = models.TextField()
+    timestamp = models.DateTimeField(auto_now_add=True)
+
+
+class Notification(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+
+    TYPE_CHOICES = [
+        ('reminder', 'Reminder'),
+        ('message', 'Message'),
+        ('update', 'Update'),
+    ]
+    type = models.CharField(max_length=10, choices=TYPE_CHOICES)
+    content = models.TextField()
+    is_read = models.BooleanField(default=False)
+    timestamp = models.DateTimeField(auto_now_add=True)

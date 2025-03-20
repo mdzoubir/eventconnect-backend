@@ -4,9 +4,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
-from rest_framework.status import HTTP_201_CREATED
 from rest_framework.pagination import PageNumberPagination
-from rest_framework.decorators import action
 
 from .models import Event, RSVP, User, EventCategory
 from .serializers import EventListSerializer, EventSerializer, UserRegistrationSerializer, RSVPSerializer, EventCategorySerializer
@@ -34,9 +32,8 @@ class EventViewSet(viewsets.ModelViewSet):
             return queryset.order_by('-created_at')
         elif ordering == 'upcoming':
             now = timezone.now()
-            return queryset.filter(date__gte=now).order_by('date')
+            return queryset.filter(date__gte=now).order_by('datetime')
 
-        print(queryset)
         return queryset
 
     def get_serializer_class(self):
@@ -60,7 +57,7 @@ class EventViewSet(viewsets.ModelViewSet):
             raise PermissionDenied(
                 "Only organizers can create events."
             )
-        serializer.save(organizer=user)
+        serializer.save(creator=user)
 
     def perform_update(self, serializer):
         user = self.request.user
@@ -90,7 +87,7 @@ class RSVPViewSet(viewsets.ModelViewSet):
         user = self.request.user
         event = serializer.validated_data['event']
 
-        if event.date < timezone.now():
+        if event.datetime < timezone.now():
             raise ValidationError({"error": "You cannot RSVP for an event that has already passed."})
 
         if RSVP.objects.filter(user=user, event=event).exists():
