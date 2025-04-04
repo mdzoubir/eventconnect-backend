@@ -1,7 +1,7 @@
 from django.db import transaction
 from django.utils import timezone
 from rest_framework import serializers
-from .models import Event, User, RSVP, EventCategory, EventImage, Location
+from .models import Event, User, RSVP, EventCategory, EventImage, Location, Contact
 
 
 class LocationSerializer(serializers.ModelSerializer):
@@ -54,11 +54,11 @@ class EventSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Event
-        fields = ['id', 'title', 'description', 'datetime', 'location', 'creator', 'category', 'images']
+        fields = ['id', 'title', 'description', 'datetime', 'location', 'creator', 'category', 'images', 'capacity', 'price']
         read_only_fields = ('creator',)
 
     def validate(self, data):
-        if data['date'] < timezone.now():
+        if data['datetime'] < timezone.now():
             raise serializers.ValidationError({"date": "Event date cannot be in the past."})
         return data
 
@@ -115,3 +115,9 @@ class EventListSerializer(serializers.ModelSerializer):
         if primary_image:
             return EventImageSerializer(primary_image).data
         return None
+
+
+class ContactSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Contact
+        fields = '__all__'

@@ -1,13 +1,15 @@
 from django.utils import timezone
-from rest_framework import viewsets, generics, serializers
+from rest_framework import viewsets, generics, mixins
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 
-from .models import Event, RSVP, User, EventCategory
-from .serializers import EventListSerializer, EventSerializer, UserRegistrationSerializer, RSVPSerializer, EventCategorySerializer
+from .models import Event, RSVP, User, EventCategory, Contact
+from .permissions import IsOrganizerReadOnly
+from .serializers import EventListSerializer, EventSerializer, UserRegistrationSerializer, RSVPSerializer, \
+    EventCategorySerializer, ContactSerializer
 
 from .utils import match_events_to_user
 
@@ -99,6 +101,22 @@ class RSVPViewSet(viewsets.ModelViewSet):
 class EventCategoryViewSet(viewsets.ModelViewSet):
     queryset = EventCategory.objects.all()
     serializer_class = EventCategorySerializer
+
+
+class ContactViewSet(mixins.CreateModelMixin,
+                     mixins.ListModelMixin,
+                     mixins.RetrieveModelMixin,
+                     viewsets.GenericViewSet):  # Note: no UpdateModelMixin or DestroyModelMixin
+    queryset = Contact.objects.all()
+    serializer_class = ContactSerializer
+
+    def get_permissions(self):
+        print(self.request.body)
+        if self.action == 'create':
+            # Anyone can create a contact message
+            return [AllowAny()]
+        # Only organizers can list or retrieve
+        return [IsOrganizerReadOnly()]
 
 
 @api_view(['GET'])
