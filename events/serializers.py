@@ -1,7 +1,9 @@
+import json
+
 from django.db import transaction
 from django.utils import timezone
 from rest_framework import serializers
-from .models import Event, User, RSVP, EventCategory, EventImage, Location, Contact
+from .models import Event, User, RSVP, EventCategory, EventImage, Location, Contact, Subscriber
 
 
 class LocationSerializer(serializers.ModelSerializer):
@@ -40,21 +42,23 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
 
         return user
 
+
 class EventImageSerializer(serializers.ModelSerializer):
     class Meta:
         model = EventImage
-        fields = ['id', 'image', 'is_primary']
+        fields = ['image', 'is_primary']
 
 
 class EventSerializer(serializers.ModelSerializer):
     category = serializers.PrimaryKeyRelatedField(queryset=EventCategory.objects.all(), allow_null=True)
-    location = LocationSerializer()
-    images = EventImageSerializer(many=True, required=False)
+    location = serializers.CharField()
+    images = EventImageSerializer(many=True, required=False, read_only=True)
     creator = serializers.ReadOnlyField(source='creator.username')
 
     class Meta:
         model = Event
-        fields = ['id', 'title', 'description', 'datetime', 'location', 'creator', 'category', 'images', 'capacity', 'price']
+        fields = ['id', 'title', 'description', 'datetime', 'location', 'creator', 'category', 'images', 'capacity',
+                  'price', 'status']
         read_only_fields = ('creator',)
 
     def validate(self, data):
@@ -63,22 +67,25 @@ class EventSerializer(serializers.ModelSerializer):
         return data
 
     def create(self, validated_data):
-        images_data = self.context['request'].FILES.getlist('images')
-        primary_image = self.context['request'].data.get('primary_image')
+        request = self.context['request']
+        images_data = request.FILES.getlist('images')
+        primary_index = request.data.get('primary_image')
 
-        location_data = validated_data.pop('location')
-        location, _ = Location.objects.get_or_create(**location_data)
+        # Parse location JSON string
+        location_raw = validated_data.pop('location')
+        try:
+            location_dict = json.loads(location_raw)
+        except Exception:
+            raise serializers.ValidationError({"location": "Invalid JSON format for location."})
 
-        # Create event
-        event = Event.objects.create(location=location, **validated_data)
+        location, _ = Location.objects.get_or_create(**location_dict)
+        validated_data['location'] = location
 
-        for index, image_data in enumerate(images_data):
-            is_primary = str(index) == str(primary_image)
-            EventImage.objects.create(
-                event=event,
-                image=image_data,
-                is_primary=is_primary
-            )
+        event = Event.objects.create(**validated_data)
+
+        for index, image_file in enumerate(images_data):
+            is_primary = str(index) == str(primary_index)
+            EventImage.objects.create(event=event, image=image_file, is_primary=is_primary)
 
         return event
 
@@ -99,7 +106,7 @@ class RSVPSerializer(serializers.ModelSerializer):
 class EventCategorySerializer(serializers.ModelSerializer):
     class Meta:
         model = EventCategory
-        fields = ["name"]
+        fields = ["id", "name"]
 
 
 class EventListSerializer(serializers.ModelSerializer):
@@ -121,3 +128,9 @@ class ContactSerializer(serializers.ModelSerializer):
     class Meta:
         model = Contact
         fields = '__all__'
+
+
+class SubscriberSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Subscriber
+        fields = ['email']

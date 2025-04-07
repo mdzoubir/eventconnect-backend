@@ -143,3 +143,8 @@ class Contact(models.Model):
     name = models.CharField(max_length=255)
     email = models.EmailField()
     message = models.TextField()
+    send_at = models.DateTimeField(auto_now_add=True)
+
+class Subscriber(models.Model):
+    email = models.EmailField(unique=True)
+    subscribe_at = models.DateTimeField(auto_now_add=True)
