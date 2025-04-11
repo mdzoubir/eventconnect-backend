@@ -29,8 +29,8 @@ class EventViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         queryset = Event.objects.all()
-        ordering = self.request.query_params.get('ordering')
-        category_name = self.request.query_params.get('category__name')
+        ordering = self.request.query_params.get('sorting')
+        category_name = self.request.query_params.get('event_type')
 
         if category_name:
             queryset = queryset.filter(category__name__iexact=category_name)
