@@ -1,18 +1,19 @@
+import math
+
 from django.db import IntegrityError
 from django.db.models.aggregates import Count
 from django.utils import timezone
-from rest_framework import viewsets, generics, mixins
-from rest_framework.decorators import api_view, permission_classes, action
+from rest_framework import viewsets, generics, mixins, permissions, status
+from rest_framework.decorators import api_view, permission_classes
 from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
-from rest_framework.pagination import PageNumberPagination
 
 from .models import Event, RSVP, User, EventCategory, Contact, Subscriber
-from .permissions import IsOrganizerReadOnly
+from .permissions import IsOrganizerReadOnly, IsAdminOrOrganizer, IsOwnerOrAllowed
 from .serializers import EventListSerializer, EventSerializer, UserRegistrationSerializer, RSVPSerializer, \
-    EventCategorySerializer, ContactSerializer, SubscriberSerializer
-
+    EventCategorySerializer, ContactSerializer, SubscriberSerializer, UserSerializer
 from .utils import match_events_to_user
 
 
@@ -23,25 +24,73 @@ class EventPagination(PageNumberPagination):
     max_page_size = 100
 
 
+class UsersViewSet(viewsets.ModelViewSet):
+    queryset = User.objects.all()
+    serializer_class = UserSerializer
+
+    def get_permissions(self):
+        """
+        Instantiates and returns the list of permissions that this view requires.
+        """
+        if self.action == 'create':
+            # Anyone can create a user (register)
+            permission_classes = [permissions.AllowAny]
+        elif self.action in ['update', 'partial_update', 'destroy']:
+            # Only admins or the user themselves can update/delete
+            permission_classes = [permissions.IsAuthenticated, IsOwnerOrAllowed]
+        else:
+            # For list and retrieve, require admin permissions
+            permission_classes = [IsAdminOrOrganizer]
+        return [permission() for permission in permission_classes]
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+
+        # This will run all validators and raise validation errors if any
+        serializer.is_valid(raise_exception=True)
+
+        # Additional pre-save validation if needed
+        try:
+            self.perform_create(serializer)
+            headers = self.get_success_headers(serializer.data)
+            return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+
+        # Additional validation for updates
+        if 'role' in serializer.validated_data and not request.user.role in ['admin', 'organizer']:
+            return Response(
+                {"role": "You don't have permission to change roles."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        self.perform_update(serializer)
+        return Response(serializer.data)
+
+    def get_queryset(self):
+        queryset = User.objects.all()
+        role = self.request.query_params.get('role')
+        if role:
+            queryset = queryset.filter(role__iexact=role).exclude(status='deleted')
+        return queryset
+
+
+
+
 class EventViewSet(viewsets.ModelViewSet):
     queryset = Event.objects.all()
     pagination_class = EventPagination
 
     def get_queryset(self):
-        queryset = Event.objects.all()
         ordering = self.request.query_params.get('sorting')
-        category_name = self.request.query_params.get('event_type')
-
-        if category_name:
-            queryset = queryset.filter(category__name__iexact=category_name)
-
-        if ordering == 'recent':
-            queryset = queryset.order_by('-created_at')
-        elif ordering == 'upcoming':
-            now = timezone.now()
-            queryset = queryset.filter(datetime__gte=now).order_by('datetime')
-
-        return queryset
+        category = self.request.query_params.get('event_type')
+        return Event.objects.active().filter_by_category(category).order_events(ordering)
 
     def get_serializer_class(self):
         if self.action == 'list':
@@ -50,7 +99,7 @@ class EventViewSet(viewsets.ModelViewSet):
 
     def list(self, request, *args, **kwargs):
         response = super().list(request, *args, **kwargs)
-        response.data['total_pages'] = (response.data['count'] // self.pagination_class.page_size) + 1
+        response.data['total_pages'] = math.ceil(response.data['count'] / self.pagination_class.page_size)
         return response
 
     def get_permissions(self):
@@ -76,7 +125,8 @@ class EventViewSet(viewsets.ModelViewSet):
         user = self.request.user
         if user.role != 'organizer':
             raise PermissionDenied('Only organizers can delete events.')
-        instance.delete()
+        instance.is_deleted = True
+        instance.save()
 
 
 class EventCategoryViewSet(viewsets.ReadOnlyModelViewSet):

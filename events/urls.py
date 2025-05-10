@@ -1,9 +1,10 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from .views import EventViewSet, RSVPViewSet, UserRegistrationView, matched_events, EventCategoryViewSet, \
-    ContactViewSet, SubscriberViewSet
+    ContactViewSet, SubscriberViewSet, UsersViewSet
 
 router = DefaultRouter()
+router.register(r'users', UsersViewSet)
 router.register(r'events', EventViewSet)
 router.register(r'rsvps', RSVPViewSet)
 router.register(r'event-categories', EventCategoryViewSet)

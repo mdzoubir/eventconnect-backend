@@ -40,6 +40,7 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'rest_framework',
+    'drf_yasg',
     'corsheaders',
     'events',
 ]
@@ -157,5 +158,6 @@ SIMPLE_JWT = {
     "REFRESH_TOKEN_LIFETIME": timedelta(days=7),  # Refresh token lasts 7 days
     "ROTATE_REFRESH_TOKENS": True,  # Generates a new refresh token each time
     "BLACKLIST_AFTER_ROTATION": True,  # Prevents old refresh tokens from working
+    "TOKEN_OBTAIN_SERIALIZER": "events.serializers.CustomTokenObtainPairSerializer",
 }
 

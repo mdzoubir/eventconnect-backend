@@ -1,6 +1,10 @@
 from django.contrib.auth.base_user import BaseUserManager
 from django.contrib.auth.models import AbstractUser
+from django.core.validators import EmailValidator
 from django.db import models
+from rest_framework.exceptions import ValidationError
+
+from events.managers import EventQuerySet
 
 
 class UserManager(BaseUserManager):
@@ -21,7 +25,10 @@ class UserManager(BaseUserManager):
 
 class User(AbstractUser):
     username = None
-    email = models.EmailField(unique=True)
+    email = models.EmailField(
+        unique=True,
+        validators=[EmailValidator(message="Enter a valid email address.")]
+    )
     profile_data = models.JSONField(default=dict, blank=True)
     preferences = models.JSONField(default=dict, blank=True)
     location = models.ForeignKey('Location', on_delete=models.SET_NULL, null=True, blank=False)
@@ -32,12 +39,38 @@ class User(AbstractUser):
         ('organizer', 'Organizer'),
         ('admin', 'Admin'),
     ]
-    role = models.CharField(max_length=10, choices=ROLE_CHOICES, default='user')
+    role = models.CharField(
+        max_length=10,
+        choices=ROLE_CHOICES,
+        default='user'
+    )
+
+    STATUS_CHOICES = [
+        ('active', 'Active'),
+        ('inactive', 'Inactive'),
+        ('deleted', 'Deleted'),
+        ('pending', 'Pending')
+    ]
+    status = models.CharField(
+        max_length=10,
+        choices=STATUS_CHOICES,
+        default='active'
+    )
 
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = []
 
     objects = UserManager()
+
+    def __str__(self):
+        return self.email
+
+    def clean(self):
+        """Additional model-level validation"""
+        super().clean()
+        # adding validation to not delete the admin user
+        if self.status == 'deleted' and self.role == 'admin':
+            raise ValidationError("Admin accounts cannot be marked as deleted")
 
 
 class Location(models.Model):
@@ -61,12 +94,15 @@ class EventCategory(models.Model):
 class Event(models.Model):
     title = models.CharField(max_length=255)
     description = models.TextField()
-    datetime = models.DateTimeField()
+    start_datetime = models.DateTimeField()
+    end_datetime = models.DateTimeField()
     location = models.ForeignKey(Location, on_delete=models.CASCADE)
     category = models.ForeignKey(EventCategory, on_delete=models.SET_NULL, null=True)
-    creator = models.ForeignKey(User, on_delete=models.CASCADE)
+    creator = models.ForeignKey(User, on_delete=models.CASCADE, related_name="created_events")
+
     capacity = models.PositiveIntegerField()
     price = models.DecimalField(max_digits=10, decimal_places=2)
+    is_deleted = models.BooleanField(default=False)
 
     STATUS_CHOICES = [
         ('draft', 'Draft'),
@@ -76,6 +112,13 @@ class Event(models.Model):
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='draft')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    objects = EventQuerySet.as_manager()
+
+
+    @property
+    def duration(self):
+        return self.end_datetime - self.start_datetime
 
     def __str__(self):
         return self.title
