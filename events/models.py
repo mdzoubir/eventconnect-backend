@@ -1,26 +1,11 @@
-from django.contrib.auth.base_user import BaseUserManager
 from django.contrib.auth.models import AbstractUser
 from django.core.validators import EmailValidator
 from django.db import models
 from rest_framework.exceptions import ValidationError
 
-from events.managers import EventQuerySet
+from events.managers import EventQuerySet, UserManager
 
 
-class UserManager(BaseUserManager):
-    def create_user(self, email, password=None, **extra_fields):
-        if not email:
-            raise ValueError("Users must have an email address")
-        email = self.normalize_email(email)
-        user = self.model(email=email, **extra_fields)
-        user.set_password(password)
-        user.save(using=self._db)
-        return user
-
-    def create_superuser(self, email, password=None, **extra_fields):
-        extra_fields.setdefault('is_staff', True)
-        extra_fields.setdefault('is_superuser', True)
-        return self.create_user(email, password, **extra_fields)
 
 
 class User(AbstractUser):
@@ -31,8 +16,11 @@ class User(AbstractUser):
     )
     profile_data = models.JSONField(default=dict, blank=True)
     preferences = models.JSONField(default=dict, blank=True)
-    location = models.ForeignKey('Location', on_delete=models.SET_NULL, null=True, blank=False)
+    location = models.ForeignKey('Location', on_delete=models.SET_NULL, null=True, blank=True)
     availability = models.JSONField(default=dict, blank=True)
+    phone_number = models.CharField(max_length=15, blank=True, null=True)
+    date_of_birth = models.DateField(null=True, blank=True)
+    email_verified = models.BooleanField(default=False)
 
     ROLE_CHOICES = [
         ('user', 'User'),
@@ -78,6 +66,9 @@ class Location(models.Model):
     latitude = models.FloatField(null=True, blank=True)
     longitude = models.FloatField(null=True, blank=True)
     address = models.TextField(null=True, blank=True)
+    country = models.CharField(max_length=100)
+    city = models.CharField(max_length=100)
+    postal_code = models.CharField(max_length=20, blank=True)
 
     def __str__(self):
         return self.name
@@ -87,6 +78,14 @@ class EventCategory(models.Model):
     name = models.CharField(max_length=255)
     description = models.TextField(blank=True)
 
+    def __str__(self):
+        return self.name
+
+
+class EventTag(models.Model):
+    name = models.CharField(max_length=50, unique=True)
+    slug = models.SlugField(unique=True)
+    
     def __str__(self):
         return self.name
 
@@ -102,6 +101,8 @@ class Event(models.Model):
 
     capacity = models.PositiveIntegerField()
     price = models.DecimalField(max_digits=10, decimal_places=2)
+    minimum_age = models.PositiveIntegerField(null=True, blank=True)
+
     is_deleted = models.BooleanField(default=False)
 
     STATUS_CHOICES = [
@@ -112,6 +113,8 @@ class Event(models.Model):
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='draft')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    tags = models.ManyToManyField(EventTag, blank=True)
 
     objects = EventQuerySet.as_manager()
 
@@ -150,6 +153,14 @@ class RSVP(models.Model):
     ]
     status = models.CharField(max_length=10, choices=STATUS_CHOICES)
     timestamp = models.DateTimeField(auto_now_add=True)
+    ticket = models.ForeignKey('Ticket', on_delete=models.CASCADE)
+    quantity = models.PositiveIntegerField(default=1)
+    notes = models.TextField(blank=True)
+    check_in_time = models.DateTimeField(null=True, blank=True)
+    check_in_status = models.BooleanField(default=False)
+
+
+
 
 
 class Message(models.Model):
@@ -158,6 +169,9 @@ class Message(models.Model):
     event = models.ForeignKey(Event, on_delete=models.CASCADE, null=True, blank=True)
     content = models.TextField()
     timestamp = models.DateTimeField(auto_now_add=True)
+    is_read = models.BooleanField(default=False)
+    read_at = models.DateTimeField(null=True, blank=True)
+    attachment = models.FileField(upload_to='message_attachments/', null=True, blank=True)
 
 
 class Review(models.Model):
@@ -191,3 +205,44 @@ class Contact(models.Model):
 class Subscriber(models.Model):
     email = models.EmailField(unique=True)
     subscribe_at = models.DateTimeField(auto_now_add=True)
+
+
+class Ticket(models.Model):
+    event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name='tickets')
+    name = models.CharField(max_length=100)  # e.g., "VIP", "Early Bird"
+    description = models.TextField()
+    price = models.DecimalField(max_digits=10, decimal_places=2)
+    quantity = models.PositiveIntegerField()
+    remaining = models.PositiveIntegerField()
+    sale_start = models.DateTimeField()
+    sale_end = models.DateTimeField()
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        unique_together = ['event', 'name']
+
+
+class Transaction(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    ticket = models.ForeignKey(Ticket, on_delete=models.CASCADE)
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    payment_method = models.CharField(max_length=50)
+    transaction_id = models.CharField(max_length=100, unique=True)
+    status = models.CharField(max_length=20, choices=[
+        ('pending', 'Pending'),
+        ('completed', 'Completed'),
+        ('failed', 'Failed'),
+        ('refunded', 'Refunded')
+    ])
+    created_at = models.DateTimeField(auto_now_add=True)
+
+
+class Waitlist(models.Model):
+    event = models.ForeignKey(Event, on_delete=models.CASCADE)
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    joined_at = models.DateTimeField(auto_now_add=True)
+    notified = models.BooleanField(default=False)
+    notified_at = models.DateTimeField(null=True, blank=True)
+    
+    class Meta:
+        unique_together = ['event', 'user']

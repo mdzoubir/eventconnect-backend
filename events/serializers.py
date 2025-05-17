@@ -8,13 +8,13 @@ from django.utils import timezone
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
-from .models import Event, User, RSVP, EventCategory, EventImage, Location, Contact, Subscriber
+from .models import Event, User, RSVP, EventCategory, EventImage, Location, Contact, Subscriber, EventTag, Ticket, Transaction, Waitlist, Review, Notification
 
 
 class LocationSerializer(serializers.ModelSerializer):
     class Meta:
         model = Location
-        fields = ['id', 'name', 'latitude', 'longitude', 'address']
+        fields = ['id', 'name', 'latitude', 'longitude', 'address', 'country', 'city', 'postal_code']
         extra_kwargs = {
             'name': {'validators': []}  # Remove all validators including UniqueValidator
         }
@@ -53,20 +53,36 @@ class EventImageSerializer(serializers.ModelSerializer):
         fields = ['image', 'is_primary']
 
 
+class EventTagSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = EventTag
+        fields = ['id', 'name', 'slug']
+
 class EventSerializer(serializers.ModelSerializer):
     category = serializers.PrimaryKeyRelatedField(queryset=EventCategory.objects.all(), allow_null=True)
-    location = serializers.CharField()
+    location = LocationSerializer()
     images = EventImageSerializer(many=True, required=False, read_only=True)
-    creator = serializers.ReadOnlyField(source='creator.username')
+    creator = serializers.ReadOnlyField(source='creator.email')
+    tags = EventTagSerializer(many=True, required=False)
+    tickets = serializers.SerializerMethodField()
 
     class Meta:
         model = Event
-        fields = [...]
-        read_only_fields = ('creator','is_deleted')
+        fields = ['id', 'title', 'description', 'start_datetime', 'end_datetime',
+                 'location', 'category', 'creator', 'capacity', 'price',
+                 'minimum_age', 'is_deleted', 'status', 'created_at',
+                 'updated_at', 'images', 'tags', 'tickets']
+        read_only_fields = ('creator', 'is_deleted')
+
+    def get_tickets(self, obj):
+        return TicketSerializer(obj.tickets.filter(is_active=True), many=True).data
 
     def validate(self, data):
-        if data['start_datetime'] < timezone.now() or data['end_datetime'] < timezone.now():
-            raise serializers.ValidationError({"date": "Event date cannot be in the past."})
+        # Existing validation
+        if data['start_datetime'] < timezone.now():
+            raise serializers.ValidationError({"start_datetime": "Event start date cannot be in the past."})
+        if data['end_datetime'] < data['start_datetime']:
+            raise serializers.ValidationError({"end_datetime": "Event end date must be after start date."})
         return data
 
     def create(self, validated_data):
@@ -171,11 +187,37 @@ class UserSerializer(serializers.ModelSerializer):
 
 
 
+class TicketSerializer(serializers.ModelSerializer):
+    available = serializers.BooleanField(read_only=True)
+    
+    class Meta:
+        model = Ticket
+        fields = ['id', 'event', 'name', 'description', 'price', 'quantity',
+                 'remaining', 'sale_start', 'sale_end', 'is_active', 'available']
+    
+    def validate(self, data):
+        if data['sale_end'] < data['sale_start']:
+            raise serializers.ValidationError({"sale_end": "Sale end date must be after sale start date."})
+        if data['quantity'] < 1:
+            raise serializers.ValidationError({"quantity": "Quantity must be at least 1."})
+        return data
+
+
+
 class RSVPSerializer(serializers.ModelSerializer):
+    ticket_details = TicketSerializer(source='ticket', read_only=True)
+
     class Meta:
         model = RSVP
-        fields = '__all__'
-        read_only_fields = ('user', 'timestamp')
+        fields = ['id', 'user', 'event', 'status', 'timestamp', 'ticket',
+                 'ticket_details', 'quantity', 'notes', 'check_in_time',
+                 'check_in_status']
+        read_only_fields = ('user', 'timestamp', 'check_in_time', 'check_in_status')
+
+    def validate_quantity(self, value):
+        if value < 1:
+            raise serializers.ValidationError("Quantity must be at least 1.")
+        return value
 
 
 class EventCategorySerializer(serializers.ModelSerializer):
@@ -221,3 +263,64 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         token['role'] = user.role  # assuming you have a role field in your user model
 
         return token
+
+
+class TransactionSerializer(serializers.ModelSerializer):
+    ticket_details = TicketSerializer(source='ticket', read_only=True)
+    
+    class Meta:
+        model = Transaction
+        fields = ['id', 'user', 'ticket', 'ticket_details', 'amount',
+                 'payment_method', 'transaction_id', 'status', 'created_at']
+        read_only_fields = ('user', 'transaction_id', 'created_at')
+
+    def validate(self, data):
+        ticket = data['ticket']
+        if ticket.remaining < 1:
+            raise serializers.ValidationError({"ticket": "This ticket is sold out."})
+        if not ticket.is_active:
+            raise serializers.ValidationError({"ticket": "This ticket is not available for purchase."})
+        return data
+
+
+class WaitlistSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Waitlist
+        fields = ['id', 'event', 'user', 'joined_at', 'notified', 'notified_at']
+        read_only_fields = ('user', 'joined_at', 'notified', 'notified_at')
+
+
+class ReviewSerializer(serializers.ModelSerializer):
+    user_details = UserSerializer(source='user', read_only=True)
+    
+    class Meta:
+        model = Review
+        fields = ['id', 'user', 'user_details', 'event', 'rating',
+                 'comment', 'timestamp']
+        read_only_fields = ('user', 'timestamp')
+
+    def validate_rating(self, value):
+        if not (1 <= value <= 5):
+            raise serializers.ValidationError("Rating must be between 1 and 5.")
+        return value
+
+
+class NotificationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Notification
+        fields = ['id', 'user', 'type', 'content', 'is_read',
+                 'timestamp']
+        read_only_fields = ('user', 'timestamp')
+
+
+class EventDetailSerializer(EventSerializer):
+    reviews = ReviewSerializer(many=True, read_only=True)
+    waitlist_count = serializers.IntegerField(read_only=True)
+    is_sold_out = serializers.BooleanField(read_only=True)
+    
+    class Meta(EventSerializer.Meta):
+        fields = EventSerializer.Meta.fields + ['reviews', 'waitlist_count', 'is_sold_out']
+
+
+
+

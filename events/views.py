@@ -1,19 +1,18 @@
 import math
 
 from django.db import IntegrityError
-from django.db.models.aggregates import Count
+from django.db.models.aggregates import Count, Sum, Avg
 from django.utils import timezone
 from rest_framework import viewsets, generics, mixins, permissions, status
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, action
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 
-from .models import Event, RSVP, User, EventCategory, Contact, Subscriber
+from .models import Event, RSVP, User, EventCategory, Contact, Subscriber, Ticket, Waitlist, Notification, Transaction
 from .permissions import IsOrganizerReadOnly, IsAdminOrOrganizer, IsOwnerOrAllowed
-from .serializers import EventListSerializer, EventSerializer, UserRegistrationSerializer, RSVPSerializer, \
-    EventCategorySerializer, ContactSerializer, SubscriberSerializer, UserSerializer
+from .serializers import *
 from .utils import match_events_to_user
 
 
@@ -93,6 +92,8 @@ class EventViewSet(viewsets.ModelViewSet):
         return Event.objects.active().filter_by_category(category).order_events(ordering)
 
     def get_serializer_class(self):
+        if self.action == 'retrieve':
+            return EventDetailSerializer
         if self.action == 'list':
             return EventListSerializer
         return EventSerializer
@@ -128,6 +129,28 @@ class EventViewSet(viewsets.ModelViewSet):
         instance.is_deleted = True
         instance.save()
 
+    def retrieve(self, request, *args, **kwargs):
+        instance = self.get_object()
+        # Add additional data for EventDetailSerializer
+        instance.waitlist_count = Waitlist.objects.filter(event=instance).count()
+        instance.is_sold_out = all(
+            ticket.remaining == 0 for ticket in instance.tickets.filter(is_active=True)
+        )
+        serializer = self.get_serializer(instance)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['post'])
+    def join_waitlist(self, request, pk=None):
+        event = self.get_object()
+        try:
+            Waitlist.objects.create(event=event, user=request.user)
+            return Response({"message": "Added to waitlist"}, status=status.HTTP_201_CREATED)
+        except IntegrityError:
+            return Response(
+                {"error": "Already on waitlist"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
 
 class EventCategoryViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = EventCategory.objects.annotate(
@@ -148,11 +171,16 @@ class RSVPViewSet(viewsets.ModelViewSet):
     serializer_class = RSVPSerializer
     permission_classes = [IsAuthenticated]
 
+    def get_queryset(self):
+        if self.request.user.role == 'organizer':
+            return RSVP.objects.filter(event__creator=self.request.user)
+        return RSVP.objects.filter(user=self.request.user)
+
     def perform_create(self, serializer):
         user = self.request.user
         event = serializer.validated_data['event']
 
-        if event.datetime < timezone.now():
+        if event.start_datetime < timezone.now():
             raise ValidationError({"error": "You cannot RSVP for an event that has already passed."})
 
         if RSVP.objects.filter(user=user, event=event).exists():
@@ -207,3 +235,87 @@ def matched_events(request):
     matched = match_events_to_user(user, events)
     serializer = EventSerializer(matched, many=True)
     return Response(serializer.data)
+
+
+class TicketViewSet(viewsets.ModelViewSet):
+    queryset = Ticket.objects.all()
+    serializer_class = TicketSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return Ticket.objects.filter(event__creator=self.request.user)
+
+    def perform_create(self, serializer):
+        event = serializer.validated_data['event']
+        if event.creator != self.request.user:
+            raise PermissionDenied("You can only create tickets for your own events.")
+        serializer.save()
+
+
+class ReviewViewSet(viewsets.ModelViewSet):
+    queryset = Review.objects.all()
+    serializer_class = ReviewSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        if self.request.user.role in ['admin', 'organizer']:
+            return Review.objects.filter(event__creator=self.request.user)
+        return Review.objects.filter(user=self.request.user)
+
+    def perform_create(self, serializer):
+        event = serializer.validated_data['event']
+        if not RSVP.objects.filter(event=event, user=self.request.user, status='attending').exists():
+            raise ValidationError({"error": "You can only review events you have attended."})
+        serializer.save(user=self.request.user)
+
+
+class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = Notification.objects.all()
+    serializer_class = NotificationSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return Notification.objects.filter(user=self.request.user)
+
+    @action(detail=True, methods=['post'])
+    def mark_read(self, request, pk=None):
+        notification = self.get_object()
+        notification.is_read = True
+        notification.save()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    @action(detail=False, methods=['post'])
+    def mark_all_read(self, request):
+        self.get_queryset().update(is_read=True)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class UserProfileView(generics.RetrieveUpdateAPIView):
+    serializer_class = UserSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_object(self):
+        return self.request.user
+
+
+class EventStatisticsView(generics.RetrieveAPIView):
+    permission_classes = [IsAuthenticated, IsAdminOrOrganizer]
+
+    def get(self, request, pk):
+        event = Event.objects.get(pk=pk)
+        if event.creator != request.user and request.user.role != 'admin':
+            raise PermissionDenied("You can only view statistics for your own events.")
+
+        stats = {
+            'total_tickets_sold': Transaction.objects.filter(
+                ticket__event=event, status='completed'
+            ).count(),
+            'revenue': Transaction.objects.filter(
+                ticket__event=event, status='completed'
+            ).aggregate(total=Sum('amount'))['total'] or 0,
+            'waitlist_count': Waitlist.objects.filter(event=event).count(),
+            'average_rating': Review.objects.filter(event=event).aggregate(
+                avg=Avg('rating')
+            )['avg'] or 0,
+        }
+        return Response(stats)
